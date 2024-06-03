@@ -28,7 +28,7 @@ To train a DiT, you can use the `train.py` script.
 ```bash
 python train.py
 ```
-I use `wandb` for logging. If you don't want to use it, you can remove the logger in `train.py`.
+I use `wandb` for logging. If you don't want to use it, you can remove the logger in `train.py`. You can also check the log of the latest training on wandb [here](https://wandb.ai/archimickey/dit-cfm/runs/19ylvvzr?nw=nwuserarchimickey). I have trained the model on CIFAR10 dataset for 200k steps. The model is not converged yet by looking at the FID, more training may lead to better results.
 
 
 ## Techniques and Tricks
