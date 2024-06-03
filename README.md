@@ -32,6 +32,8 @@ I use `wandb` for logging. If you don't want to use it, you can remove the logge
 
 
 ## Techniques and Tricks
+### Flow Matching
+Instead of using the standard Gaussian Diffusion, I use the Flow Matching technique from the paper [Flow Matching for Generative Modeling](https://arxiv.org/abs/2210.02747) by using the [torchcfm](https://github.com/atong01/conditional-flow-matching/tree/main). This technique helps to sample the images faster and more efficiently.
 ### Tailored SNR Samplers
 I implement the Logit-Normal Sampling for the timesteps. The technique is used in the Research Paper of [Stable Diffusion 3](https://arxiv.org/pdf/2403.03206). This is useful for biasing the intermediate steps during the training of the diffusion model.
 ### ViT with registers
