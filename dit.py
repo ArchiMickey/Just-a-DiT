@@ -5,8 +5,6 @@ import math
 from timm.models.vision_transformer import PatchEmbed, Mlp
 from timm.models.vision_transformer import Attention
 import torch.nn.functional as F
-from typing import Tuple
-from functools import partial
 from einops import repeat, pack, unpack
 
 
@@ -77,12 +75,11 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         return F.normalize(x, dim=-1) * self.scale * self.g
 
-
 class DiTBlock(nn.Module):
     def __init__(self, dim, num_heads, mlp_ratio=4.0):
         super().__init__()
         self.norm1 = RMSNorm(dim)
-        self.attn = Attention(dim, num_heads=num_heads, qkv_bias=True)
+        self.attn = Attention(dim, num_heads=num_heads, qkv_bias=True, qk_norm=True, norm_layer=RMSNorm)
         self.norm2 = RMSNorm(dim)
         mlp_dim = int(dim * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
@@ -96,10 +93,10 @@ class DiTBlock(nn.Module):
             self.adaLN_modulation(c).chunk(6, dim=-1)
         )
         x = x + gate_msa.unsqueeze(1) * self.attn(
-            modulate(self.norm1(x), shift_msa, scale_msa)
+            modulate(self.norm1(x), scale_msa, shift_msa)
         )
         x = x + gate_mlp.unsqueeze(1) * self.mlp(
-            modulate(self.norm2(x), shift_mlp, scale_mlp)
+            modulate(self.norm2(x), scale_mlp, shift_mlp)
         )
         return x
 
@@ -138,10 +135,13 @@ class DiT(nn.Module):
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.patch_size = patch_size
         self.num_heads = num_heads
+        self.num_classes = num_classes
         
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, dim)
         self.t_embedder = TimestepEmbedder(dim)
-        self.y_embedder = LabelEmbedder(num_classes, dim, class_dropout_prob)
+        
+        self.use_cond = num_classes is not None
+        self.y_embedder = LabelEmbedder(num_classes, dim, class_dropout_prob) if self.use_cond else None
         
         #register tokens
         self.register_tokens = nn.Parameter(
@@ -230,8 +230,10 @@ class DiT(nn.Module):
         x, ps = pack([x, r], 'b * d ')
         
         t = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y, self.training)    # (N, D)
-        c = t + y                                # (N, D)
+        c = t
+        if self.use_cond:
+            y = self.y_embedder(y, self.training)    # (N, D)
+        c = c + y                                # (N, D)
         
         for i, block in enumerate(self.blocks):
             x = block(x, c)                      # (N, T, D)
