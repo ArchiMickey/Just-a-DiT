@@ -10,7 +10,7 @@ from tqdm import tqdm
 from ema import LitEma
 from bitsandbytes.optim import AdamW8bit
 
-from sampler import Sampler
+from model import RectifiedFlow
 from fid_evaluation import FIDEvaluation
 
 import moviepy.editor as mpy
@@ -54,8 +54,7 @@ def main():
     optimizer = AdamW8bit(model.parameters(), lr=1e-4, weight_decay=0.0)
     FM = TargetConditionalFlowMatcher(sigma=0.0)
     
-    sampler = Sampler(model)
-    t_sampler = torch.distributions.LogisticNormal(0.0, 1.0)
+    sampler = RectifiedFlow(model)
     scaler = torch.cuda.amp.GradScaler()
 
     logger = wandb.init(project="dit-cfm")
@@ -131,7 +130,7 @@ def main():
             x1 = x1 * 2 - 1 # normalize to [-1, 1]
             y = data[1].to(device)
             x0 = torch.randn_like(x1)
-            t = t_sampler.sample((x1.shape[0],))[:, 0].type_as(x1)
+            t = torch.randn((x1.shape[0],), device=device).sigmoid()
 
             t, xt, ut = FM.sample_location_and_conditional_flow(x0, x1, t)
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
@@ -155,7 +154,8 @@ def main():
                 )
                 losses.clear()
                 model.eval()
-                sample_and_log_images()
+                with torch.autocast(dtype=torch.bfloat16):
+                    sample_and_log_images()
                 model.train()
                 
 
@@ -164,7 +164,8 @@ def main():
                 model_ema.store(model.parameters())
                 model_ema.copy_to(model)
                 
-                fid_score = fid_eval.fid_score()
+                with torch.autocast(dtype=torch.bfloat16):
+                    fid_score = fid_eval.fid_score()
                 print(f"FID score with EMA at step {step}: {fid_score}")
                 
                 model_ema.restore(model.parameters())
