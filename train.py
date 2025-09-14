@@ -3,9 +3,6 @@ import torch
 import torchvision
 from torchvision import transforms as T
 from torchvision.utils import make_grid, save_image
-from torchcfm.conditional_flow_matching import *
-from torchcfm.models.unet import UNetModel
-from torchdyn.core import NeuralODE
 from tqdm import tqdm
 from ema import LitEma
 from bitsandbytes.optim import AdamW8bit
@@ -52,7 +49,6 @@ def main():
     ).to(device)
     model_ema = LitEma(model)
     optimizer = AdamW8bit(model.parameters(), lr=1e-4, weight_decay=0.0)
-    FM = TargetConditionalFlowMatcher(sigma=0.0)
     
     sampler = RectifiedFlow(model)
     scaler = torch.cuda.amp.GradScaler()
@@ -127,15 +123,9 @@ def main():
             data = next(train_dataloader)
             optimizer.zero_grad()
             x1 = data[0].to(device)
-            x1 = x1 * 2 - 1 # normalize to [-1, 1]
             y = data[1].to(device)
-            x0 = torch.randn_like(x1)
-            t = torch.randn((x1.shape[0],), device=device).sigmoid()
-
-            t, xt, ut = FM.sample_location_and_conditional_flow(x0, x1, t)
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                vt = model(xt, t, y)
-                loss = torch.mean((vt - ut) ** 2)
+                loss = sampler(x1, y)
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
