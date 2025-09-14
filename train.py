@@ -3,9 +3,6 @@ import torch
 import torchvision
 from torchvision import transforms as T
 from torchvision.utils import make_grid, save_image
-from torchcfm.conditional_flow_matching import *
-from torchcfm.models.unet import UNetModel
-from torchdyn.core import NeuralODE
 from tqdm import tqdm
 from ema import LitEma
 from bitsandbytes.optim import AdamW8bit
@@ -52,22 +49,21 @@ def main():
     ).to(device)
     model_ema = LitEma(model)
     optimizer = AdamW8bit(model.parameters(), lr=1e-4, weight_decay=0.0)
-    FM = TargetConditionalFlowMatcher(sigma=0.0)
-    
+
     sampler = RectifiedFlow(model)
     scaler = torch.cuda.amp.GradScaler()
 
     logger = wandb.init(project="dit-cfm")
     fid_eval = FIDEvaluation(batch_size * 2, train_dataloader, sampler)
-    
+
     def sample_and_log_images():
         log_imgs = []
         log_gifs = []
         for cfg_scale in [1.0, 2.5, 5.0]:
-            print(
-                f"Sampling images at step {step} with cfg_scale {cfg_scale}..."
+            print(f"Sampling images at step {step} with cfg_scale {cfg_scale}...")
+            traj = sampler.sample_each_class(
+                10, cfg_scale=cfg_scale, return_all_steps=True
             )
-            traj = sampler.sample_each_class(10, cfg_scale=cfg_scale, return_all_steps=True)
             log_img = make_grid(traj[-1], nrow=10)
             img_save_path = f"images/step{step}_cfg{cfg_scale}.png"
             save_image(log_img, img_save_path)
@@ -94,17 +90,17 @@ def main():
             print(
                 f"Sampling images with ema model at step {step} with cfg_scale {cfg_scale}..."
             )
-            traj = sampler.sample_each_class(10, cfg_scale=cfg_scale, return_all_steps=True)
+            traj = sampler.sample_each_class(
+                10, cfg_scale=cfg_scale, return_all_steps=True
+            )
             log_img = make_grid(traj[-1], nrow=10)
             img_save_path = f"images/step{step}_cfg{cfg_scale}_ema.png"
             save_image(log_img, img_save_path)
             # print(f"Saved images to {img_save_path}")
             log_imgs.append(
-                wandb.Image(
-                    img_save_path, caption=f"EMA with cfg_scale: {cfg_scale}"
-                )
+                wandb.Image(img_save_path, caption=f"EMA with cfg_scale: {cfg_scale}")
             )
-            
+
             images_list = [
                 make_grid(frame, nrow=10).permute(1, 2, 0).cpu().numpy() * 255
                 for frame in traj
@@ -119,23 +115,18 @@ def main():
             )
             model_ema.restore(model.parameters())
         logger.log({"Images": log_imgs, "Gifs": log_gifs, "step": step})
-    
+
     losses = []
     with tqdm(range(n_steps), dynamic_ncols=True) as pbar:
         pbar.set_description("Training")
         for step in pbar:
             data = next(train_dataloader)
             optimizer.zero_grad()
-            x1 = data[0].to(device)
-            x1 = x1 * 2 - 1 # normalize to [-1, 1]
-            y = data[1].to(device)
-            x0 = torch.randn_like(x1)
-            t = torch.randn((x1.shape[0],), device=device).sigmoid()
 
-            t, xt, ut = FM.sample_location_and_conditional_flow(x0, x1, t)
+            x1 = data[0].to(device)
+            y = data[1].to(device)
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                vt = model(xt, t, y)
-                loss = torch.mean((vt - ut) ** 2)
+                loss = sampler(x1, y)
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
@@ -147,30 +138,28 @@ def main():
                 pbar.set_postfix({"loss": loss.item()})
                 logger.log({"loss": loss.item(), "step": step})
 
-            
             if step % 10000 == 0 or step == n_steps - 1:
                 print(
-                    f"Step: {step+1}/{n_steps} | loss: {sum(losses) / len(losses):.4f}"
+                    f"Step: {step + 1}/{n_steps} | loss: {sum(losses) / len(losses):.4f}"
                 )
                 losses.clear()
                 model.eval()
                 with torch.autocast(dtype=torch.bfloat16):
                     sample_and_log_images()
                 model.train()
-                
 
             if step % 50000 == 0 or step == n_steps - 1:
                 model.eval()
                 model_ema.store(model.parameters())
                 model_ema.copy_to(model)
-                
+
                 with torch.autocast(dtype=torch.bfloat16):
                     fid_score = fid_eval.fid_score()
                 print(f"FID score with EMA at step {step}: {fid_score}")
-                
+
                 model_ema.restore(model.parameters())
                 model.train()
-                
+
                 wandb.log({"FID": fid_score, "step": step})
 
     state_dict = {
