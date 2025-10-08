@@ -19,7 +19,7 @@ class TimestepEmbedder(nn.Module):
         self.nfreq = nfreq
 
     @staticmethod
-    def timestep_embedding(t, dim, max_period=10000):
+    def timestep_embedding(t, dim, max_period=10):
         half_dim = dim // 2
         freqs = torch.exp(
             -math.log(max_period)
